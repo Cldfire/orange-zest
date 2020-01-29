@@ -12,7 +12,7 @@
 use serde_derive::{Serialize, Deserialize};
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Likes {
+pub struct LikesRaw {
     pub collection: Option<Vec<Collection>>,
     pub next_href: Option<String>,
 }
@@ -76,20 +76,21 @@ pub struct Media {
     pub transcodings: Option<Vec<Transcoding>>,
 }
 
+// As far as I can tell none of these fields need to be optional
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Transcoding {
-    pub url: Option<String>,
-    pub preset: Option<String>,
-    pub duration: Option<i64>,
-    pub snipped: Option<bool>,
-    pub format: Option<Format>,
-    pub quality: Option<String>,
+    pub url: String,
+    pub preset: String,
+    pub duration: i64,
+    pub snipped: bool,
+    pub format: Format,
+    pub quality: Quality,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Format {
-    pub protocol: Option<String>,
-    pub mime_type: Option<String>,
+    pub protocol: Protocol,
+    pub mime_type: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -143,4 +144,20 @@ pub struct Visual {
     pub urn: Option<String>,
     pub entry_time: Option<i64>,
     pub visual_url: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub enum Protocol {
+    #[serde(rename = "hls")]
+    Hls,
+    #[serde(rename = "progressive")]
+    Progressive,
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub enum Quality {
+    #[serde(rename = "hq")]
+    Hq,
+    #[serde(rename = "sq")]
+    Sq,
 }
