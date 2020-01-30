@@ -1,14 +1,24 @@
+pub mod common;
 pub mod likes;
 pub mod me;
+pub mod playlists;
 
 use serde_derive::{Serialize, Deserialize};
-use likes::{Track, Quality, Protocol, Collection};
+use common::{Track, Quality, Protocol};
+use playlists::Playlist;
+use likes::LikesCollection;
 use crate::{Error, Zester};
 use std::io::prelude::*;
 
+// TODO: fix naming discrepancies between fields of structs
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Likes {
-    pub collections: Vec<Collection>,
+    pub collections: Vec<LikesCollection>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Playlists {
+    pub playlists: Vec<Playlist>,
 }
 
 impl Track {

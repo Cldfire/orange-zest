@@ -3,6 +3,7 @@
 // Turn on derive debug impl and make all properties optional
 
 use serde_derive::{Serialize, Deserialize};
+use super::common::*;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Me {
@@ -70,18 +71,4 @@ pub struct Quota {
     pub upload_tracks_used: Option<i64>,
     pub unlimited_upload_duration_quota: Option<bool>,
     pub unlimited_upload_track_quota: Option<bool>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Visuals {
-    pub urn: Option<String>,
-    pub enabled: Option<bool>,
-    pub visuals: Option<Vec<Visual>>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Visual {
-    pub urn: Option<String>,
-    pub entry_time: Option<i64>,
-    pub visual_url: Option<String>,
 }

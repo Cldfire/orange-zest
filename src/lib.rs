@@ -1,8 +1,9 @@
 pub mod api;
 
-use api::Likes;
+use api::{Likes, Playlists};
 use api::likes::LikesRaw;
 use api::me::Me;
+use api::playlists::PlaylistsRaw;
 use std::thread;
 use std::time::Duration;
 use std::path::Path;
@@ -147,7 +148,7 @@ impl Zester {
         while let Some(ref next_href) = likes_raw.next_href {
             // sending requests too close together eventually results in 500s
             // being returned
-            thread::sleep(Duration::from_millis(2_000));
+            thread::sleep(Duration::from_millis(2));
 
             let json_string = self.api_req_full(next_href, &[], true)?;
             likes_raw = serde_json::from_str(&json_string)?;
@@ -156,6 +157,56 @@ impl Zester {
         }
 
         Ok(Likes { collections })
+    }
+
+    /// Get all of the user's liked and created playlists.
+    pub fn playlists(&self) -> Result<Playlists, Error> {
+        let mut playlists_info = vec![];
+        let mut playlists = vec![];
+
+        let json_string = self.api_req(
+            &format!("users/{}/playlists/liked_and_owned", self.user_id.unwrap()),
+            &[
+                ("limit", "50"),
+                ("offset", "0"),
+                ("linked_partitioning", "1")
+            ]
+        )?;
+
+        let mut playlists_raw: PlaylistsRaw = serde_json::from_str(&json_string)?;
+        playlists_info.extend(playlists_raw.collection.unwrap().into_iter());
+
+        // continually grab lists of playlists until there are none left
+        while let Some(ref next_href) = playlists_raw.next_href {
+            // sending requests too close together eventually results in 500s
+            // being returned
+            thread::sleep(Duration::from_secs(2));
+
+            let json_string = self.api_req_full(next_href, &[], true)?;
+            playlists_raw = serde_json::from_str(&json_string)?;
+
+            playlists_info.extend(playlists_raw.collection.unwrap().into_iter());
+        }
+
+        // now we need to get the full information about all the playlists, which
+        // is what we're actually returning
+
+        for collection in playlists_info {
+            // sending requests too close together eventually results in 500s
+            // being returned
+            // TODO: instead of waiting every time, only start waiting after
+            // a 500 occurs
+            thread::sleep(Duration::from_secs(2));
+
+            let pinfo = collection.playlist.unwrap();
+
+            // TODO: don't unwrap
+            let uri = &pinfo.uri.unwrap();
+            let json_string = self.api_req_full(uri, &[("representation", "full")], true)?;
+            playlists.push(serde_json::from_str(&json_string)?);
+        }
+
+        Ok(Playlists { playlists })
     }
 }
 
