@@ -18,7 +18,8 @@ const API_BASE: &str = "https://api-v2.soundcloud.com/";
 pub enum Error {
     IoError(std::io::Error),
     JsonDecodeError(serde_json::Error),
-    HttpError(String),
+    /// Contains the response status code
+    HttpError(u16),
     /// Something we needed wasn't present in the JSON
     ///
     /// (The "something" will be described by the string.)
@@ -68,6 +69,12 @@ pub enum LikesZestingEvent {
     MoreLikesInfoDownloaded {
         /// The number of additional likes that info was downloaded for
         count: i64
+    },
+
+    /// The server returned an error response and we are waiting for the given
+    /// amount of seconds before retrying the request.
+    PausedAfterServerError {
+        time_secs: u64
     }
 }
 
@@ -98,7 +105,13 @@ pub enum PlaylistsZestingEvent<'a> {
     /// End of downloading full information for another playlist.
     ///
     /// This event can occur more than once.
-    FinishPlaylistInfoDownload
+    FinishPlaylistInfoDownload,
+
+    /// The server returned an error response and we are waiting for the given
+    /// amount of seconds before retrying the request.
+    PausedAfterServerError {
+        time_secs: u64
+    }
 }
 
 /// The `Zester` provides the functionality to "zest" SoundCloud for data once
@@ -122,7 +135,7 @@ impl Zester {
         add_client_id: bool
     ) -> Result<String, Error> {
         let mut r = ureq::get(path);
-    
+
         for param in query_params {
             r.query(param.0, param.1);
         }
@@ -136,9 +149,9 @@ impl Zester {
         let resp = r.call();
 
         if resp.ok() {
-            return Ok(resp.into_string()?)
+            Ok(resp.into_string()?)
         } else {
-            return Err(Error::HttpError(resp.status_line().into()));
+            Err(Error::HttpError(resp.status()))
         }
     }
 
@@ -175,6 +188,7 @@ impl Zester {
     /// allowing you to handle them as you please.
     pub fn likes<F: Fn(LikesZestingEvent)>(&self, cb: Option<F>) -> Result<Likes, Error> {
         use LikesZestingEvent::*;
+        let pause_secs = 2;
 
         let mut collections = vec![];
 
@@ -196,11 +210,22 @@ impl Zester {
 
         // continually grab lists of likes until there are none left
         while let Some(ref next_href) = likes_raw.next_href {
-            // sending requests too close together eventually results in 500s
-            // being returned
-            thread::sleep(Duration::from_millis(2));
+            let json_string = match self.api_req_full(next_href, &[], true) {
+                Ok(s) => s,
+                Err(Error::HttpError(code)) if code >= 500 && code < 600 => {
+                    // the server responded with an error. waiting a couple of seconds
+                    // and then trying again seems to resolve this, so that's
+                    // what we'll do
+                    // TODO: completely bail out if max retry count reached?
 
-            let json_string = self.api_req_full(next_href, &[], true)?;
+                    if let Some(cb) = cb.as_ref() {
+                        cb(PausedAfterServerError { time_secs: pause_secs });
+                    }
+                    thread::sleep(Duration::from_secs(pause_secs));
+                    continue;
+                },
+                Err(e) => return Err(e)
+            };
             likes_raw = serde_json::from_str(&json_string)?;
 
             let likes_count = likes_raw.collection.as_ref().unwrap().len();
@@ -219,6 +244,7 @@ impl Zester {
     /// allowing you to handle them as you please.
     pub fn playlists<F: Fn(PlaylistsZestingEvent)>(&self, cb: Option<F>) -> Result<Playlists, Error> {
         use PlaylistsZestingEvent::*;
+        let pause_secs = 2;
 
         let mut playlists_info = vec![];
         let mut playlists = vec![];
@@ -241,17 +267,28 @@ impl Zester {
 
         // continually grab lists of playlists until there are none left
         while let Some(ref next_href) = playlists_raw.next_href {
-            // sending requests too close together eventually results in 500s
-            // being returned
-            thread::sleep(Duration::from_secs(2));
+            let json_string = match self.api_req_full(next_href, &[], true) {
+                Ok(s) => s,
+                Err(Error::HttpError(code)) if code >= 500 && code < 600 => {
+                    // the server responded with an error. waiting a couple of seconds
+                    // and then trying again seems to resolve this, so that's
+                    // what we'll do
 
-            let json_string = self.api_req_full(next_href, &[], true)?;
+                    if let Some(cb) = cb.as_ref() {
+                        cb(PausedAfterServerError { time_secs: pause_secs });
+                    }
+                    thread::sleep(Duration::from_secs(pause_secs));
+                    continue;
+                },
+                Err(e) => return Err(e)
+            };
+
             playlists_raw = serde_json::from_str(&json_string)?;
 
             playlists_count = playlists_raw.collection.as_ref().unwrap().len();
             playlists_info.extend(playlists_raw.collection.unwrap().into_iter());
             if let Some(cb) = cb.as_ref() {
-                cb(MorePlaylistMetaInfoDownloaded { count: playlists_count as i64});
+                cb(MorePlaylistMetaInfoDownloaded { count: playlists_count as i64 });
             }
         }
 
@@ -259,27 +296,40 @@ impl Zester {
             cb(FinishPlaylistMetaInfoDownloading);
         }
 
+        let mut playlists_info_iter = playlists_info.into_iter();
+        let mut collection = playlists_info_iter.next();
+
         // now we need to get the full information about all the playlists, which
         // is what we're actually returning
-        for collection in playlists_info {
-            let pmeta = collection.playlist.unwrap();
+        while let Some(c) = collection.as_ref() {
+            let pmeta = c.playlist.as_ref().unwrap();
             if let Some(cb) = cb.as_ref() {
                 cb(StartPlaylistInfoDownload { playlist_meta: &pmeta });
             }
 
-            // sending requests too close together eventually results in 500s
-            // being returned
-            // TODO: instead of waiting every time, only start waiting after
-            // a 500 occurs
-            thread::sleep(Duration::from_secs(2));
-
             // TODO: don't unwrap
-            let uri = &pmeta.uri.unwrap();
-            let json_string = self.api_req_full(uri, &[("representation", "full")], true)?;
+            let uri = pmeta.uri.as_ref().unwrap();
+            let json_string = match self.api_req_full(uri, &[("representation", "full")], true) {
+                Ok(s) => s,
+                Err(Error::HttpError(code)) if code >= 500 && code < 600 => {
+                    // the server responded with an error. waiting a couple of seconds
+                    // and then trying again seems to resolve this, so that's
+                    // what we'll do
+
+                    if let Some(cb) = cb.as_ref() {
+                        cb(PausedAfterServerError { time_secs: pause_secs });
+                    }
+                    thread::sleep(Duration::from_secs(pause_secs));
+                    continue;
+                },
+                Err(e) => return Err(e)
+            };
             playlists.push(serde_json::from_str(&json_string)?);
             if let Some(cb) = cb.as_ref() {
                 cb(FinishPlaylistInfoDownload);
             }
+
+            collection = playlists_info_iter.next();
         }
 
         Ok(Playlists { playlists })
