@@ -288,6 +288,7 @@ impl Zester {
 
             // TODO: don't unwrap
             let uri = pmeta.uri.as_ref().unwrap();
+            // TODO: this "wait after 500" pattern is common and needs to be abstracted
             let json_string = match self.api_req_full(uri, &[("representation", "full")], true) {
                 Ok(s) => s,
                 Err(Error::HttpError(code)) if code >= 500 && code < 600 => {
@@ -303,11 +304,15 @@ impl Zester {
                 },
                 Err(e) => return Err(e)
             };
-            playlists.push(serde_json::from_str(&json_string)?);
+
+            let mut playlist: Playlist = serde_json::from_str(&json_string)?;
+            // Make sure the track information is complete
+            playlist.complete_tracks_info(self)?;
+            playlists.push(playlist);
+
             if let Some(cb) = cb.as_ref() {
                 cb(FinishPlaylistInfoDownload { playlist_meta: &pmeta });
             }
-
             collection = playlists_info_iter.next();
         }
 
@@ -407,6 +412,22 @@ impl Zester {
         }
 
         Ok(())
+    }
+
+    /// Get information for the specified track IDs.
+    pub fn tracks_info<A: AsRef<[u64]>>(&self, ids: A) -> Result<Vec<Track>, Error> {
+        let mut ids_string = String::new();
+
+        for id in ids.as_ref() {
+            ids_string.push_str(&id.to_string());
+            ids_string.push(',');
+        }
+        ids_string.pop();
+
+        Ok(serde_json::from_str(&self.api_req(
+            "tracks",
+            &[("ids", &ids_string)]
+        )?)?)
     }
 }
 
