@@ -7,6 +7,7 @@ use serde_derive::{Serialize, Deserialize};
 use common::{Track, Quality, Protocol};
 use playlists::Playlist;
 use likes::LikesCollection;
+use me::Me;
 use crate::{Error, Zester};
 use std::io::prelude::*;
 
@@ -56,5 +57,13 @@ impl Track {
         } else {
             Err(Error::DataNotPresent("media file url in info json".into()))
         }
+    }
+}
+
+impl Me {
+    pub fn total_playlist_count(&self) -> i64 {
+        self.playlist_count.unwrap() +
+            self.playlist_likes_count.unwrap() +
+            self.private_playlists_count.unwrap()
     }
 }

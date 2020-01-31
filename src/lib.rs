@@ -3,7 +3,7 @@ pub mod api;
 use api::{Likes, Playlists};
 use api::likes::LikesRaw;
 use api::me::Me;
-use api::playlists::PlaylistsRaw;
+use api::playlists::{PlaylistsRaw, PlaylistMeta};
 use std::thread;
 use std::time::Duration;
 use std::path::Path;
@@ -59,6 +59,36 @@ pub fn write_json<P: AsRef<Path>, O: Serialize>(object: &O, path: P, pretty_prin
     Ok(())
 }
 
+/// Events that can occur while zesting playlists
+#[derive(Debug)]
+pub enum PlaylistZestingEvent<'a> {
+    /// Finished downloading "meta"-data about `count` more playlists.
+    ///
+    /// This event can occur more than once.
+    MorePlaylistMetaInfoDownloaded {
+        /// The number of additional playlists that info was downloaded for
+        count: i64
+    },
+
+    /// Finished downloading "meta"-data for all playlists.
+    ///
+    /// This event occurs only once.
+    FinishPlaylistMetaInfoDownloading,
+
+    /// Start of downloading full information for another playlist.
+    ///
+    /// This event can occur more than once.
+    StartPlaylistInfoDownload {
+        /// The name of the playlist info is being downloaded for
+        playlist_meta: &'a PlaylistMeta
+    },
+
+    /// End of downloading full information for another playlist.
+    ///
+    /// This event can occur more than once.
+    FinishPlaylistInfoDownload
+}
+
 /// The `Zester` provides the functionality to "zest" SoundCloud for data once
 /// constructed.
 /// 
@@ -67,7 +97,7 @@ pub fn write_json<P: AsRef<Path>, O: Serialize>(object: &O, path: P, pretty_prin
 pub struct Zester {
     oauth_token: String,
     client_id: String,
-    user_id: Option<i64>
+    pub me: Option<Me>
 }
 
 impl Zester {
@@ -114,10 +144,10 @@ impl Zester {
         let mut zester = Self {
             oauth_token,
             client_id,
-            user_id: None
+            me: None
         };
 
-        zester.user_id = Some(zester.me()?.id.unwrap());
+        zester.me = Some(zester.me()?);
         Ok(zester)
     }
 
@@ -133,7 +163,7 @@ impl Zester {
         let mut collections = vec![];
 
         let json_string = self.api_req(
-            &format!("users/{}/track_likes", self.user_id.unwrap()),
+            &format!("users/{}/track_likes", self.me.as_ref().unwrap().id.unwrap()),
             &[
                 ("limit", "500"),
                 ("offset", "0"),
@@ -160,12 +190,15 @@ impl Zester {
     }
 
     /// Get all of the user's liked and created playlists.
-    pub fn playlists(&self) -> Result<Playlists, Error> {
+    ///
+    /// The optionally-provided callback will be called when various events occur,
+    /// allowing you to handle them as you please.
+    pub fn playlists<F: Fn(PlaylistZestingEvent)>(&self, cb: Option<F>) -> Result<Playlists, Error> {
         let mut playlists_info = vec![];
         let mut playlists = vec![];
 
         let json_string = self.api_req(
-            &format!("users/{}/playlists/liked_and_owned", self.user_id.unwrap()),
+            &format!("users/{}/playlists/liked_and_owned", self.me.as_ref().unwrap().id.unwrap()),
             &[
                 ("limit", "50"),
                 ("offset", "0"),
@@ -174,7 +207,11 @@ impl Zester {
         )?;
 
         let mut playlists_raw: PlaylistsRaw = serde_json::from_str(&json_string)?;
+        let mut playlists_count = playlists_raw.collection.as_ref().unwrap().len();
         playlists_info.extend(playlists_raw.collection.unwrap().into_iter());
+        if let Some(cb) = cb.as_ref() {
+            cb(PlaylistZestingEvent::MorePlaylistMetaInfoDownloaded { count: playlists_count as i64});
+        }
 
         // continually grab lists of playlists until there are none left
         while let Some(ref next_href) = playlists_raw.next_href {
@@ -185,25 +222,38 @@ impl Zester {
             let json_string = self.api_req_full(next_href, &[], true)?;
             playlists_raw = serde_json::from_str(&json_string)?;
 
+            playlists_count = playlists_raw.collection.as_ref().unwrap().len();
             playlists_info.extend(playlists_raw.collection.unwrap().into_iter());
+            if let Some(cb) = cb.as_ref() {
+                cb(PlaylistZestingEvent::MorePlaylistMetaInfoDownloaded { count: playlists_count as i64});
+            }
+        }
+
+        if let Some(cb) = cb.as_ref() {
+            cb(PlaylistZestingEvent::FinishPlaylistMetaInfoDownloading);
         }
 
         // now we need to get the full information about all the playlists, which
         // is what we're actually returning
-
         for collection in playlists_info {
+            let pmeta = collection.playlist.unwrap();
+            if let Some(cb) = cb.as_ref() {
+                cb(PlaylistZestingEvent::StartPlaylistInfoDownload { playlist_meta: &pmeta });
+            }
+
             // sending requests too close together eventually results in 500s
             // being returned
             // TODO: instead of waiting every time, only start waiting after
             // a 500 occurs
             thread::sleep(Duration::from_secs(2));
 
-            let pinfo = collection.playlist.unwrap();
-
             // TODO: don't unwrap
-            let uri = &pinfo.uri.unwrap();
+            let uri = &pmeta.uri.unwrap();
             let json_string = self.api_req_full(uri, &[("representation", "full")], true)?;
             playlists.push(serde_json::from_str(&json_string)?);
+            if let Some(cb) = cb.as_ref() {
+                cb(PlaylistZestingEvent::FinishPlaylistInfoDownload);
+            }
         }
 
         Ok(Playlists { playlists })

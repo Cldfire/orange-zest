@@ -61,14 +61,14 @@ pub struct PlaylistsRaw {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PlaylistCollection {
-    pub playlist: Option<PlaylistShort>,
+    pub playlist: Option<PlaylistMeta>,
     pub created_at: Option<String>,
     pub user: Option<User>,
     pub uuid: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct PlaylistShort {
+pub struct PlaylistMeta {
     pub managed_by_feeds: Option<bool>,
     pub kind: Option<Type>,
     pub set_type: Option<SetType>,
