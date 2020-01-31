@@ -3,11 +3,13 @@ pub mod api;
 use api::{Likes, Playlists};
 use api::likes::LikesRaw;
 use api::me::Me;
+use api::common::Track;
 use api::playlists::{PlaylistsRaw, PlaylistMeta};
 use std::thread;
 use std::time::Duration;
 use std::path::Path;
 use std::fs::File;
+use std::cmp::min;
 use std::io::prelude::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -60,7 +62,7 @@ pub fn write_json<P: AsRef<Path>, O: Serialize>(object: &O, path: P, pretty_prin
     Ok(())
 }
 
-/// Events that can occur while zesting playlists
+/// Events that can occur while zesting likes
 #[derive(Debug)]
 pub enum LikesZestingEvent {
     /// Finished downloading more data about likes.
@@ -69,6 +71,38 @@ pub enum LikesZestingEvent {
     MoreLikesInfoDownloaded {
         /// The number of additional likes that info was downloaded for
         count: i64
+    },
+
+    /// The server returned an error response and we are waiting for the given
+    /// amount of seconds before retrying the request.
+    PausedAfterServerError {
+        time_secs: u64
+    }
+}
+
+/// Events that can occur while zesting audio for likes
+pub enum LikesAudioZestingEvent<'a> {
+    /// The number of tracks that are going to be downloaded.
+    ///
+    /// This event occurs only once.
+    NumTracksToDownload {
+        num: u64
+    },
+
+    /// Start of downloading a track.
+    ///
+    /// This event can occur multiple times.
+    StartTrackDownload {
+        track_info: &'a Track
+    },
+
+    /// Finished downloading a track.
+    ///
+    /// `track_data` is a `Read` instance that you can use to access the data.
+    FinishTrackDownload {
+        track_info: &'a Track,
+        // TODO: replace with impl Read when stable
+        track_data: Box<dyn Read>
     },
 
     /// The server returned an error response and we are waiting for the given
@@ -236,6 +270,59 @@ impl Zester {
         }
 
         Ok(Likes { collections })
+    }
+
+    /// Download the the audio files for all of the user's likes.
+    ///
+    /// The optionally-provided callback will be called when various events occur,
+    /// allowing you to handle them as you please.
+    ///
+    /// Of particular note, one of the events the callback will hand you gives
+    /// you access to the downloaded audio data for you to use however works
+    /// best for your use-case.
+    ///
+    /// The `likes_json_file` parameter specifies the path to a file containing
+    /// previously downloaded likes information (see `likes`).
+    ///
+    /// `num_recent` specifies the number of recent likes to download.
+    pub fn likes_audio<P: AsRef<Path>, F: Fn(LikesAudioZestingEvent)>(
+        &self,
+        likes_json_file: P,
+        num_recent: u64,
+        cb: F
+    ) -> Result<(), Error> {
+        use LikesAudioZestingEvent::*;
+        let pause_secs = 2;
+
+        let likes: Likes = load_json(&likes_json_file)?;
+        let download_num = min(num_recent as usize, likes.collections.len());
+        cb(NumTracksToDownload { num: download_num as u64 });
+
+        let mut tracks_iter = likes.collections.into_iter().map(|c| c.track).take(download_num);
+        let mut maybe_track = tracks_iter.next();
+
+        while let Some(track) = maybe_track.as_ref() {
+            cb(StartTrackDownload { track_info: &track });
+
+            let read = match track.download(self) {
+                Ok(r) => r,
+                Err(Error::HttpError(code)) if code >= 500 && code < 600 => {
+                    // the server responded with an error. waiting a couple of seconds
+                    // and then trying again seems to resolve this, so that's
+                    // what we'll do
+
+                    cb(PausedAfterServerError { time_secs: pause_secs });
+                    thread::sleep(Duration::from_secs(pause_secs));
+                    continue;
+                },
+                Err(e) => return Err(e)
+            };
+            cb(FinishTrackDownload { track_info: track, track_data: Box::new(read) });
+
+            maybe_track = tracks_iter.next();
+        }
+
+        Ok(())
     }
 
     /// Get all of the user's liked and created playlists.
