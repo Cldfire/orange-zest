@@ -61,7 +61,19 @@ pub fn write_json<P: AsRef<Path>, O: Serialize>(object: &O, path: P, pretty_prin
 
 /// Events that can occur while zesting playlists
 #[derive(Debug)]
-pub enum PlaylistZestingEvent<'a> {
+pub enum LikesZestingEvent {
+    /// Finished downloading more data about likes.
+    ///
+    /// This event can occur more than once.
+    MoreLikesInfoDownloaded {
+        /// The number of additional likes that info was downloaded for
+        count: i64
+    }
+}
+
+/// Events that can occur while zesting playlists
+#[derive(Debug)]
+pub enum PlaylistsZestingEvent<'a> {
     /// Finished downloading "meta"-data about `count` more playlists.
     ///
     /// This event can occur more than once.
@@ -158,8 +170,12 @@ impl Zester {
     }
 
     /// Get all of the user's liked tracks.
-    // TODO: clean up types. collection applies to more than likes
-    pub fn likes(&self) -> Result<Likes, Error> {
+    ///
+    /// The optionally-provided callback will be called when various events occur,
+    /// allowing you to handle them as you please.
+    pub fn likes<F: Fn(LikesZestingEvent)>(&self, cb: Option<F>) -> Result<Likes, Error> {
+        use LikesZestingEvent::*;
+
         let mut collections = vec![];
 
         let json_string = self.api_req(
@@ -172,7 +188,11 @@ impl Zester {
         )?;
 
         let mut likes_raw: LikesRaw = serde_json::from_str(&json_string)?;
+        let likes_count = likes_raw.collection.as_ref().unwrap().len();
         collections.extend(likes_raw.collection.unwrap().into_iter());
+        if let Some(cb) = cb.as_ref() {
+            cb(MoreLikesInfoDownloaded { count: likes_count as i64 });
+        }
 
         // continually grab lists of likes until there are none left
         while let Some(ref next_href) = likes_raw.next_href {
@@ -183,7 +203,11 @@ impl Zester {
             let json_string = self.api_req_full(next_href, &[], true)?;
             likes_raw = serde_json::from_str(&json_string)?;
 
+            let likes_count = likes_raw.collection.as_ref().unwrap().len();
             collections.extend(likes_raw.collection.unwrap().into_iter());
+            if let Some(cb) = cb.as_ref() {
+                cb(MoreLikesInfoDownloaded { count: likes_count as i64 });
+            }
         }
 
         Ok(Likes { collections })
@@ -193,7 +217,9 @@ impl Zester {
     ///
     /// The optionally-provided callback will be called when various events occur,
     /// allowing you to handle them as you please.
-    pub fn playlists<F: Fn(PlaylistZestingEvent)>(&self, cb: Option<F>) -> Result<Playlists, Error> {
+    pub fn playlists<F: Fn(PlaylistsZestingEvent)>(&self, cb: Option<F>) -> Result<Playlists, Error> {
+        use PlaylistsZestingEvent::*;
+
         let mut playlists_info = vec![];
         let mut playlists = vec![];
 
@@ -210,7 +236,7 @@ impl Zester {
         let mut playlists_count = playlists_raw.collection.as_ref().unwrap().len();
         playlists_info.extend(playlists_raw.collection.unwrap().into_iter());
         if let Some(cb) = cb.as_ref() {
-            cb(PlaylistZestingEvent::MorePlaylistMetaInfoDownloaded { count: playlists_count as i64});
+            cb(MorePlaylistMetaInfoDownloaded { count: playlists_count as i64});
         }
 
         // continually grab lists of playlists until there are none left
@@ -225,12 +251,12 @@ impl Zester {
             playlists_count = playlists_raw.collection.as_ref().unwrap().len();
             playlists_info.extend(playlists_raw.collection.unwrap().into_iter());
             if let Some(cb) = cb.as_ref() {
-                cb(PlaylistZestingEvent::MorePlaylistMetaInfoDownloaded { count: playlists_count as i64});
+                cb(MorePlaylistMetaInfoDownloaded { count: playlists_count as i64});
             }
         }
 
         if let Some(cb) = cb.as_ref() {
-            cb(PlaylistZestingEvent::FinishPlaylistMetaInfoDownloading);
+            cb(FinishPlaylistMetaInfoDownloading);
         }
 
         // now we need to get the full information about all the playlists, which
@@ -238,7 +264,7 @@ impl Zester {
         for collection in playlists_info {
             let pmeta = collection.playlist.unwrap();
             if let Some(cb) = cb.as_ref() {
-                cb(PlaylistZestingEvent::StartPlaylistInfoDownload { playlist_meta: &pmeta });
+                cb(StartPlaylistInfoDownload { playlist_meta: &pmeta });
             }
 
             // sending requests too close together eventually results in 500s
@@ -252,7 +278,7 @@ impl Zester {
             let json_string = self.api_req_full(uri, &[("representation", "full")], true)?;
             playlists.push(serde_json::from_str(&json_string)?);
             if let Some(cb) = cb.as_ref() {
-                cb(PlaylistZestingEvent::FinishPlaylistInfoDownload);
+                cb(FinishPlaylistInfoDownload);
             }
         }
 
