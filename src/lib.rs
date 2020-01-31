@@ -4,7 +4,8 @@ pub mod events;
 use api::{Likes, Playlists};
 use api::likes::LikesRaw;
 use api::me::Me;
-use api::playlists::PlaylistsRaw;
+use api::common::Track;
+use api::playlists::{Playlist, PlaylistsRaw};
 use events::*;
 use std::thread;
 use std::time::Duration;
@@ -187,55 +188,31 @@ impl Zester {
         Ok(Likes { collections })
     }
 
-    /// Download the the audio files for all of the user's likes.
+    /// Download the audio files for the given `Likes`.
     ///
-    /// The optionally-provided callback will be called when various events occur,
+    /// The provided callback will be called when various events occur,
     /// allowing you to handle them as you please.
     ///
     /// Of particular note, one of the events the callback will hand you gives
     /// you access to the downloaded audio data for you to use however works
     /// best for your use-case.
     ///
-    /// The `likes_json_file` parameter specifies the path to a file containing
-    /// previously downloaded likes information (see `likes`).
-    ///
     /// `num_recent` specifies the number of recent likes to download.
-    pub fn likes_audio<P: AsRef<Path>, F: Fn(LikesAudioZestingEvent)>(
+    pub fn likes_audio<F: Fn(TracksAudioZestingEvent)>(
         &self,
-        likes_json_file: P,
+        likes: &Likes,
         num_recent: u64,
         cb: F
     ) -> Result<(), Error> {
-        use LikesAudioZestingEvent::*;
-        let pause_secs = 2;
+        use TracksAudioZestingEvent::*;
 
-        let likes: Likes = load_json(&likes_json_file)?;
         let download_num = min(num_recent as usize, likes.collections.len());
         cb(NumTracksToDownload { num: download_num as u64 });
 
-        let mut tracks_iter = likes.collections.into_iter().map(|c| c.track).take(download_num);
-        let mut maybe_track = tracks_iter.next();
-
-        while let Some(track) = maybe_track.as_ref() {
-            cb(StartTrackDownload { track_info: &track });
-
-            let read = match track.download(self) {
-                Ok(r) => r,
-                Err(Error::HttpError(code)) if code >= 500 && code < 600 => {
-                    // the server responded with an error. waiting a couple of seconds
-                    // and then trying again seems to resolve this, so that's
-                    // what we'll do
-
-                    cb(PausedAfterServerError { time_secs: pause_secs });
-                    thread::sleep(Duration::from_secs(pause_secs));
-                    continue;
-                },
-                Err(e) => return Err(e)
-            };
-            cb(FinishTrackDownload { track_info: track, track_data: Box::new(read) });
-
-            maybe_track = tracks_iter.next();
-        }
+        self.tracks_audio(
+            likes.collections.iter().map(|c| &c.track).take(download_num),
+            |e| cb(e)
+        )?;
 
         Ok(())
     }
@@ -328,13 +305,108 @@ impl Zester {
             };
             playlists.push(serde_json::from_str(&json_string)?);
             if let Some(cb) = cb.as_ref() {
-                cb(FinishPlaylistInfoDownload);
+                cb(FinishPlaylistInfoDownload { playlist_meta: &pmeta });
             }
 
             collection = playlists_info_iter.next();
         }
 
         Ok(Playlists { playlists })
+    }
+
+    /// Download the the audio files for all of the user's playlists.
+    ///
+    /// The optionally-provided callback will be called when various events occur,
+    /// allowing you to handle them as you please.
+    ///
+    /// Of particular note, one of the events the callback will hand you gives
+    /// you access to the downloaded audio data for you to use however works
+    /// best for your use-case.
+    ///
+    /// The `playlists_json_file` parameter specifies the path to a file containing
+    /// previously downloaded likes information (see `playlists`).
+    ///
+    /// `num_recent` specifies the number of recent playlists to download.
+    // TODO: take iterator over playlist refs instead and move loading from file
+    // to application code
+    //
+    // do the same for likes
+    pub fn playlists_audio<'a, I, F>(
+        &self,
+        playlists: I,
+        cb: F
+    ) -> Result<(), Error> where
+        I: Iterator<Item = &'a Playlist>,
+        F: Fn(PlaylistsAudioZestingEvent)
+    {
+        use PlaylistsAudioZestingEvent::*;
+        
+        let playlist_refs: Vec<_> = playlists.collect();
+        let tracks_num = playlist_refs.iter().map(|p| p.tracks.as_ref().unwrap().len() as u64).sum();
+        cb(NumItemsToDownload { playlists_num: playlist_refs.len() as u64, tracks_num });
+    
+        let mut playlists_iter = playlist_refs.into_iter();
+        let mut maybe_playlist = playlists_iter.next();
+
+        while let Some(playlist_info) = maybe_playlist.as_ref() {
+            cb(StartPlaylistDownload { playlist_info });
+
+            self.tracks_audio(
+                playlist_info.tracks.as_ref().unwrap().iter(),
+                |e| cb(TrackEvent(e, playlist_info))
+            )?;
+
+            cb(FinishPlaylistDownload { playlist_info });
+            maybe_playlist = playlists_iter.next();
+        }
+    
+        Ok(())
+    }
+
+    /// Download the audio files for each track in the given iterator.
+    ///
+    /// The provided callback will be called when various events occur, allowing
+    /// you to handle them as you please.
+    ///
+    /// Of particular note, one of the events the callback will hand you gives
+    /// you access to the downloaded audio data for you to use however works
+    /// best for your use-case.
+    pub fn tracks_audio<'a, I: Iterator<Item = &'a Track>, F: Fn(TracksAudioZestingEvent)>(
+        &self,
+        tracks: I,
+        cb: F
+    ) -> Result<(), Error> {
+        use TracksAudioZestingEvent::*;
+        let pause_secs = 2;
+
+        let track_refs: Vec<_> = tracks.collect();
+        cb(NumTracksToDownload { num: track_refs.len() as u64 });
+
+        let mut tracks_iter = track_refs.into_iter();
+        let mut maybe_track = tracks_iter.next();
+
+        while let Some(track) = maybe_track {
+            cb(StartTrackDownload { track_info: &track });
+
+            let read = match track.download(self) {
+                Ok(r) => r,
+                Err(Error::HttpError(code)) if code >= 500 && code < 600 => {
+                    // the server responded with an error. waiting a couple of seconds
+                    // and then trying again seems to resolve this, so that's
+                    // what we'll do
+
+                    cb(PausedAfterServerError { time_secs: pause_secs });
+                    thread::sleep(Duration::from_secs(pause_secs));
+                    continue;
+                },
+                Err(e) => return Err(e)
+            };
+            cb(FinishTrackDownload { track_info: track, track_data: Box::new(read) });
+
+            maybe_track = tracks_iter.next();
+        }
+
+        Ok(())
     }
 }
 

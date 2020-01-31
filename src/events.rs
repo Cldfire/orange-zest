@@ -1,5 +1,5 @@
 use crate::api::common::Track;
-use crate::api::playlists::PlaylistMeta;
+use crate::api::playlists::{PlaylistMeta, Playlist};
 use std::io::Read;
 
 /// Events that can occur while zesting likes
@@ -7,7 +7,7 @@ use std::io::Read;
 pub enum LikesZestingEvent {
     /// Finished downloading more data about likes.
     ///
-    /// This event can occur more than once.
+    /// This event can occur multiple times.
     MoreLikesInfoDownloaded {
         /// The number of additional likes that info was downloaded for
         count: i64
@@ -15,13 +15,15 @@ pub enum LikesZestingEvent {
 
     /// The server returned an error response and we are waiting for the given
     /// amount of seconds before retrying the request.
+    /// 
+    /// This event can occur multiple times.
     PausedAfterServerError {
         time_secs: u64
     }
 }
 
-/// Events that can occur while zesting audio for likes
-pub enum LikesAudioZestingEvent<'a> {
+/// Events that can occur while zesting track audio.
+pub enum TracksAudioZestingEvent<'a> {
     /// The number of tracks that are going to be downloaded.
     ///
     /// This event occurs only once.
@@ -39,6 +41,8 @@ pub enum LikesAudioZestingEvent<'a> {
     /// Finished downloading a track.
     ///
     /// `track_data` is a `Read` instance that you can use to access the data.
+    /// 
+    /// This event can occur multiple times.
     FinishTrackDownload {
         track_info: &'a Track,
         // TODO: replace with impl Read when stable
@@ -47,6 +51,8 @@ pub enum LikesAudioZestingEvent<'a> {
 
     /// The server returned an error response and we are waiting for the given
     /// amount of seconds before retrying the request.
+    /// 
+    /// This event can occur multiple times.
     PausedAfterServerError {
         time_secs: u64
     }
@@ -57,7 +63,7 @@ pub enum LikesAudioZestingEvent<'a> {
 pub enum PlaylistsZestingEvent<'a> {
     /// Finished downloading "meta"-data about `count` more playlists.
     ///
-    /// This event can occur more than once.
+    /// This event can occur multiple times.
     MorePlaylistMetaInfoDownloaded {
         /// The number of additional playlists that info was downloaded for
         count: i64
@@ -70,20 +76,51 @@ pub enum PlaylistsZestingEvent<'a> {
 
     /// Start of downloading full information for another playlist.
     ///
-    /// This event can occur more than once.
+    /// This event can occur multiple times.
     StartPlaylistInfoDownload {
-        /// The name of the playlist info is being downloaded for
         playlist_meta: &'a PlaylistMeta
     },
 
     /// End of downloading full information for another playlist.
     ///
-    /// This event can occur more than once.
-    FinishPlaylistInfoDownload,
+    /// This event can occur multiple times.
+    FinishPlaylistInfoDownload {
+        playlist_meta: &'a PlaylistMeta
+    },
 
     /// The server returned an error response and we are waiting for the given
     /// amount of seconds before retrying the request.
+    /// 
+    /// This event can occur multiple times.
     PausedAfterServerError {
         time_secs: u64
+    }
+}
+
+/// Events that can occur while zesting audio for playlists
+pub enum PlaylistsAudioZestingEvent<'a> {
+    /// The number of playlists and tracks that are going to be downloaded.
+    ///
+    /// This event occurs only once.
+    NumItemsToDownload {
+        playlists_num: u64,
+        tracks_num: u64
+    },
+
+    /// Start of downloading a playlist.
+    ///
+    /// This event can occur multiple times.
+    StartPlaylistDownload {
+        playlist_info: &'a Playlist
+    },
+
+    /// Events related to the downloading of individual tracks.
+    TrackEvent(TracksAudioZestingEvent<'a>, &'a Playlist),
+
+    /// Finished downloading a playlist.
+    /// 
+    /// This event can occur multiple times.
+    FinishPlaylistDownload {
+        playlist_info: &'a Playlist
     }
 }
