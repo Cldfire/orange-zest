@@ -134,9 +134,9 @@ impl Zester {
 
     /// Get all of the user's liked tracks.
     ///
-    /// The optionally-provided callback will be called when various events occur,
+    /// The callback you provide will be called when various events occur,
     /// allowing you to handle them as you please.
-    pub fn likes<F: Fn(LikesZestingEvent)>(&self, cb: Option<F>) -> Result<Likes, Error> {
+    pub fn likes<F: Fn(LikesZestingEvent)>(&self, cb: F) -> Result<Likes, Error> {
         use LikesZestingEvent::*;
         let pause_secs = 2;
 
@@ -154,9 +154,8 @@ impl Zester {
         let mut likes_raw: LikesRaw = serde_json::from_str(&json_string)?;
         let likes_count = likes_raw.collection.as_ref().unwrap().len();
         collections.extend(likes_raw.collection.unwrap().into_iter());
-        if let Some(cb) = cb.as_ref() {
-            cb(MoreLikesInfoDownloaded { count: likes_count as i64 });
-        }
+
+        cb(MoreLikesInfoDownloaded { count: likes_count as i64 });
 
         // continually grab lists of likes until there are none left
         while let Some(ref next_href) = likes_raw.next_href {
@@ -167,22 +166,19 @@ impl Zester {
                     // and then trying again seems to resolve this, so that's
                     // what we'll do
                     // TODO: completely bail out if max retry count reached?
-
-                    if let Some(cb) = cb.as_ref() {
-                        cb(PausedAfterServerError { time_secs: pause_secs });
-                    }
+                    cb(PausedAfterServerError { time_secs: pause_secs });
                     thread::sleep(Duration::from_secs(pause_secs));
+
                     continue;
                 },
                 Err(e) => return Err(e)
             };
-            likes_raw = serde_json::from_str(&json_string)?;
 
+            likes_raw = serde_json::from_str(&json_string)?;
             let likes_count = likes_raw.collection.as_ref().unwrap().len();
+
             collections.extend(likes_raw.collection.unwrap().into_iter());
-            if let Some(cb) = cb.as_ref() {
-                cb(MoreLikesInfoDownloaded { count: likes_count as i64 });
-            }
+            cb(MoreLikesInfoDownloaded { count: likes_count as i64 });
         }
 
         Ok(Likes { collections })
@@ -219,9 +215,9 @@ impl Zester {
 
     /// Get all of the user's liked and created playlists.
     ///
-    /// The optionally-provided callback will be called when various events occur,
+    /// The callback you provide will be called when various events occur,
     /// allowing you to handle them as you please.
-    pub fn playlists<F: Fn(PlaylistsZestingEvent)>(&self, cb: Option<F>) -> Result<Playlists, Error> {
+    pub fn playlists<F: Fn(PlaylistsZestingEvent)>(&self, cb: F) -> Result<Playlists, Error> {
         use PlaylistsZestingEvent::*;
         let pause_secs = 2;
 
@@ -240,9 +236,8 @@ impl Zester {
         let mut playlists_raw: PlaylistsRaw = serde_json::from_str(&json_string)?;
         let mut playlists_count = playlists_raw.collection.as_ref().unwrap().len();
         playlists_info.extend(playlists_raw.collection.unwrap().into_iter());
-        if let Some(cb) = cb.as_ref() {
-            cb(MorePlaylistMetaInfoDownloaded { count: playlists_count as i64});
-        }
+
+        cb(MorePlaylistMetaInfoDownloaded { count: playlists_count as i64});
 
         // continually grab lists of playlists until there are none left
         while let Some(ref next_href) = playlists_raw.next_href {
@@ -252,11 +247,9 @@ impl Zester {
                     // the server responded with an error. waiting a couple of seconds
                     // and then trying again seems to resolve this, so that's
                     // what we'll do
-
-                    if let Some(cb) = cb.as_ref() {
-                        cb(PausedAfterServerError { time_secs: pause_secs });
-                    }
+                    cb(PausedAfterServerError { time_secs: pause_secs });
                     thread::sleep(Duration::from_secs(pause_secs));
+
                     continue;
                 },
                 Err(e) => return Err(e)
@@ -266,14 +259,11 @@ impl Zester {
 
             playlists_count = playlists_raw.collection.as_ref().unwrap().len();
             playlists_info.extend(playlists_raw.collection.unwrap().into_iter());
-            if let Some(cb) = cb.as_ref() {
-                cb(MorePlaylistMetaInfoDownloaded { count: playlists_count as i64 });
-            }
+
+            cb(MorePlaylistMetaInfoDownloaded { count: playlists_count as i64 });
         }
 
-        if let Some(cb) = cb.as_ref() {
-            cb(FinishPlaylistMetaInfoDownloading);
-        }
+        cb(FinishPlaylistMetaInfoDownloading);
 
         let mut playlists_info_iter = playlists_info.into_iter();
         let mut collection = playlists_info_iter.next();
@@ -282,9 +272,7 @@ impl Zester {
         // is what we're actually returning
         while let Some(c) = collection.as_ref() {
             let pmeta = c.playlist.as_ref().unwrap();
-            if let Some(cb) = cb.as_ref() {
-                cb(StartPlaylistInfoDownload { playlist_meta: &pmeta });
-            }
+            cb(StartPlaylistInfoDownload { playlist_meta: &pmeta });
 
             // TODO: don't unwrap
             let uri = pmeta.uri.as_ref().unwrap();
@@ -295,11 +283,9 @@ impl Zester {
                     // the server responded with an error. waiting a couple of seconds
                     // and then trying again seems to resolve this, so that's
                     // what we'll do
-
-                    if let Some(cb) = cb.as_ref() {
-                        cb(PausedAfterServerError { time_secs: pause_secs });
-                    }
+                    cb(PausedAfterServerError { time_secs: pause_secs });
                     thread::sleep(Duration::from_secs(pause_secs));
+
                     continue;
                 },
                 Err(e) => return Err(e)
@@ -310,9 +296,7 @@ impl Zester {
             playlist.complete_tracks_info(self)?;
             playlists.push(playlist);
 
-            if let Some(cb) = cb.as_ref() {
-                cb(FinishPlaylistInfoDownload { playlist_meta: &pmeta });
-            }
+            cb(FinishPlaylistInfoDownload { playlist_meta: &pmeta });
             collection = playlists_info_iter.next();
         }
 

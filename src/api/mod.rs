@@ -124,7 +124,6 @@ impl Playlist {
         // Replace info in this playlist with the info we obtained
         for track in self.tracks.as_mut().unwrap().iter_mut() {
             if let Some(updated_track) = info_map.remove(track.id.as_ref().unwrap()) {
-                assert!(updated_track.media.is_none() == false);
                 *track = updated_track;
             }
         }
