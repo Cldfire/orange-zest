@@ -1,6 +1,7 @@
 use crate::api::common::Track;
 use crate::api::playlists::{PlaylistMeta, Playlist};
 use std::io::Read;
+use crate::Error;
 
 /// Events that can occur while zesting likes
 #[derive(Debug)]
@@ -49,6 +50,14 @@ pub enum TracksAudioZestingEvent<'a> {
         track_data: Box<dyn Read>
     },
 
+    /// An error occured while trying to download a track.
+    /// 
+    /// This event can occur multiple times.
+    TrackDownloadError {
+        track_info: &'a Track,
+        err: Error
+    },
+
     /// The server returned an error response and we are waiting for the given
     /// amount of seconds before retrying the request.
     /// 
@@ -86,6 +95,24 @@ pub enum PlaylistsZestingEvent<'a> {
     /// This event can occur multiple times.
     FinishPlaylistInfoDownload {
         playlist_meta: &'a PlaylistMeta
+    },
+
+    /// An error occured while downloading playlist info.
+    /// 
+    /// This event can occur multiple times.
+    PlaylistInfoDownloadError {
+        playlist_meta: &'a PlaylistMeta,
+        err: Error
+    },
+
+    /// An error occured while attempting to complete downloaded playlist information.
+    /// 
+    /// The information will still be returned, but it may not be complete.
+    /// 
+    /// This event can occur multiple times.
+    PlaylistInfoCompletionError {
+        playlist_meta: &'a PlaylistMeta,
+        err: Error
     },
 
     /// The server returned an error response and we are waiting for the given

@@ -17,6 +17,8 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 const API_BASE: &str = "https://api-v2.soundcloud.com/";
+/// Amount of time to pause after a 500 is returned from the server
+const PAUSE_SECS: u64 = 2;
 
 #[derive(Debug)]
 pub enum Error {
@@ -62,6 +64,38 @@ pub fn write_json<P: AsRef<Path>, O: Serialize>(object: &O, path: P, pretty_prin
     let mut file = File::create(path)?;
     file.write_all(&bytes)?;
     Ok(())
+}
+
+/// An enum of values to return from the body of a `retry_loop`
+enum LoopControl {
+    /// Continue on to the next iteration
+    Next,
+    /// Retry the current iteration
+    Retry
+}
+
+
+/// Loop through the given iterator with the ability to "retry" any iteration
+/// from the top of the loop body.
+fn retry_loop<'a, T, I, F>(mut iter: I, mut loop_body: F)
+    where
+        T: Copy,
+        I: Iterator<Item = T>,
+        F: FnMut(T) -> LoopControl
+{
+    let mut maybe_val = iter.next();
+
+    while let Some(val) = maybe_val {
+        match loop_body(val) {
+            LoopControl::Next => maybe_val = iter.next(),
+            LoopControl::Retry => {},
+        }
+    }
+}
+
+/// Returns true if the given HTTP status code is a 500
+fn is_500(code: u16) -> bool {
+    code >= 500 && code < 600
 }
 
 /// The `Zester` provides the functionality to "zest" SoundCloud for data once
@@ -138,7 +172,6 @@ impl Zester {
     /// allowing you to handle them as you please.
     pub fn likes<F: Fn(LikesZestingEvent)>(&self, cb: F) -> Result<Likes, Error> {
         use LikesZestingEvent::*;
-        let pause_secs = 2;
 
         let mut collections = vec![];
 
@@ -161,14 +194,14 @@ impl Zester {
         while let Some(ref next_href) = likes_raw.next_href {
             let json_string = match self.api_req_full(next_href, &[], true) {
                 Ok(s) => s,
-                Err(Error::HttpError(code)) if code >= 500 && code < 600 => {
+                Err(Error::HttpError(code)) if is_500(code) => {
                     // the server responded with an error. waiting a couple of seconds
                     // and then trying again seems to resolve this, so that's
                     // what we'll do
                     // TODO: completely bail out if max retry count reached?
-                    cb(PausedAfterServerError { time_secs: pause_secs });
-                    thread::sleep(Duration::from_secs(pause_secs));
 
+                    cb(PausedAfterServerError { time_secs: PAUSE_SECS });
+                    thread::sleep(Duration::from_secs(PAUSE_SECS));
                     continue;
                 },
                 Err(e) => return Err(e)
@@ -219,7 +252,6 @@ impl Zester {
     /// allowing you to handle them as you please.
     pub fn playlists<F: Fn(PlaylistsZestingEvent)>(&self, cb: F) -> Result<Playlists, Error> {
         use PlaylistsZestingEvent::*;
-        let pause_secs = 2;
 
         let mut playlists_info = vec![];
         let mut playlists = vec![];
@@ -247,8 +279,8 @@ impl Zester {
                     // the server responded with an error. waiting a couple of seconds
                     // and then trying again seems to resolve this, so that's
                     // what we'll do
-                    cb(PausedAfterServerError { time_secs: pause_secs });
-                    thread::sleep(Duration::from_secs(pause_secs));
+                    cb(PausedAfterServerError { time_secs: PAUSE_SECS });
+                    thread::sleep(Duration::from_secs(PAUSE_SECS));
 
                     continue;
                 },
@@ -264,41 +296,49 @@ impl Zester {
         }
 
         cb(FinishPlaylistMetaInfoDownloading);
-
-        let mut playlists_info_iter = playlists_info.into_iter();
-        let mut collection = playlists_info_iter.next();
-
+        
         // now we need to get the full information about all the playlists, which
         // is what we're actually returning
-        while let Some(c) = collection.as_ref() {
+        retry_loop(playlists_info.iter(), |c| {
             let pmeta = c.playlist.as_ref().unwrap();
             cb(StartPlaylistInfoDownload { playlist_meta: &pmeta });
 
             // TODO: don't unwrap
             let uri = pmeta.uri.as_ref().unwrap();
-            // TODO: this "wait after 500" pattern is common and needs to be abstracted
-            let json_string = match self.api_req_full(uri, &[("representation", "full")], true) {
-                Ok(s) => s,
-                Err(Error::HttpError(code)) if code >= 500 && code < 600 => {
+            match self.api_req_full(uri, &[("representation", "full")], true) {
+                Ok(s) => {
+                    let mut playlist: Playlist = match serde_json::from_str(&s) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            cb(PlaylistInfoDownloadError { playlist_meta: &pmeta, err: Error::from(e) });
+                            return LoopControl::Next;
+                        }
+                    };
+
+                    // Make sure the track information is complete
+                    if let Err(e) = playlist.complete_tracks_info(self) {
+                        cb(PlaylistInfoCompletionError { playlist_meta: &pmeta, err: e });
+                    };
+                    playlists.push(playlist);
+        
+                    cb(FinishPlaylistInfoDownload { playlist_meta: &pmeta });
+                    LoopControl::Next
+                },
+                Err(Error::HttpError(code)) if is_500(code) => {
                     // the server responded with an error. waiting a couple of seconds
                     // and then trying again seems to resolve this, so that's
                     // what we'll do
-                    cb(PausedAfterServerError { time_secs: pause_secs });
-                    thread::sleep(Duration::from_secs(pause_secs));
 
-                    continue;
+                    cb(PausedAfterServerError { time_secs: PAUSE_SECS });
+                    thread::sleep(Duration::from_secs(PAUSE_SECS));
+                    LoopControl::Retry
                 },
-                Err(e) => return Err(e)
-            };
-
-            let mut playlist: Playlist = serde_json::from_str(&json_string)?;
-            // Make sure the track information is complete
-            playlist.complete_tracks_info(self)?;
-            playlists.push(playlist);
-
-            cb(FinishPlaylistInfoDownload { playlist_meta: &pmeta });
-            collection = playlists_info_iter.next();
-        }
+                Err(e) => {
+                    cb(PlaylistInfoDownloadError { playlist_meta: &pmeta, err: e });
+                    LoopControl::Next
+                }
+            }
+        });
 
         Ok(Playlists { playlists })
     }
@@ -311,15 +351,6 @@ impl Zester {
     /// Of particular note, one of the events the callback will hand you gives
     /// you access to the downloaded audio data for you to use however works
     /// best for your use-case.
-    ///
-    /// The `playlists_json_file` parameter specifies the path to a file containing
-    /// previously downloaded likes information (see `playlists`).
-    ///
-    /// `num_recent` specifies the number of recent playlists to download.
-    // TODO: take iterator over playlist refs instead and move loading from file
-    // to application code
-    //
-    // do the same for likes
     pub fn playlists_audio<'a, I, F>(
         &self,
         playlists: I,
@@ -366,34 +397,33 @@ impl Zester {
         cb: F
     ) -> Result<(), Error> {
         use TracksAudioZestingEvent::*;
-        let pause_secs = 2;
 
         let track_refs: Vec<_> = tracks.collect();
         cb(NumTracksToDownload { num: track_refs.len() as u64 });
 
-        let mut tracks_iter = track_refs.into_iter();
-        let mut maybe_track = tracks_iter.next();
-
-        while let Some(track) = maybe_track {
+        retry_loop(track_refs.into_iter(), |track| {
             cb(StartTrackDownload { track_info: &track });
 
-            let read = match track.download(self) {
-                Ok(r) => r,
-                Err(Error::HttpError(code)) if code >= 500 && code < 600 => {
+            match track.download(self) {
+                Ok(r) => {
+                    cb(FinishTrackDownload { track_info: track, track_data: Box::new(r) });
+                    LoopControl::Next
+                },
+                Err(Error::HttpError(code)) if is_500(code) => {
                     // the server responded with an error. waiting a couple of seconds
                     // and then trying again seems to resolve this, so that's
                     // what we'll do
 
-                    cb(PausedAfterServerError { time_secs: pause_secs });
-                    thread::sleep(Duration::from_secs(pause_secs));
-                    continue;
+                    cb(PausedAfterServerError { time_secs: PAUSE_SECS });
+                    thread::sleep(Duration::from_secs(PAUSE_SECS));
+                    LoopControl::Retry
                 },
-                Err(e) => return Err(e)
-            };
-            cb(FinishTrackDownload { track_info: track, track_data: Box::new(read) });
-
-            maybe_track = tracks_iter.next();
-        }
+                Err(e) => {
+                    cb(TrackDownloadError { track_info: track, err: e });
+                    LoopControl::Next
+                }
+            }
+        });
 
         Ok(())
     }
