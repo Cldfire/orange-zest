@@ -305,7 +305,7 @@ impl Zester {
 
             // TODO: don't unwrap
             let uri = pmeta.uri.as_ref().unwrap();
-            match self.api_req_full(uri, &[("representation", "full")], true) {
+            match self.api_req_full(&uri.replace("api.", "api-v2."), &[("representation", "full")], true) {
                 Ok(s) => {
                     let mut playlist: Playlist = match serde_json::from_str(&s) {
                         Ok(p) => p,
