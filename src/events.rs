@@ -6,6 +6,13 @@ use crate::Error;
 /// Events that can occur while zesting likes
 #[derive(Debug)]
 pub enum LikesZestingEvent {
+    /// The number of likes info that is going to be downloaded.
+    ///
+    /// This event occurs only once.
+    NumLikesInfoToDownload {
+        num: u64
+    },
+
     /// Finished downloading more data about likes.
     ///
     /// This event can occur multiple times.
@@ -70,6 +77,13 @@ pub enum TracksAudioZestingEvent<'a> {
 /// Events that can occur while zesting playlists
 #[derive(Debug)]
 pub enum PlaylistsZestingEvent<'a> {
+    /// The number of playlists' info that is going to be downloaded.
+    ///
+    /// This event occurs only once.
+    NumPlaylistInfoToDownload {
+        num: u64
+    },
+
     /// Finished downloading "meta"-data about `count` more playlists.
     ///
     /// This event can occur multiple times.
