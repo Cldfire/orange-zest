@@ -1,10 +1,11 @@
 use crate::api::common::Track;
 use crate::api::playlists::{PlaylistMeta, Playlist};
 use std::io::Read;
+use serde_derive::Serialize;
 use crate::Error;
 
 /// Events that can occur while zesting likes
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub enum LikesZestingEvent {
     /// The number of likes info that is going to be downloaded.
     ///
@@ -31,6 +32,7 @@ pub enum LikesZestingEvent {
 }
 
 /// Events that can occur while zesting track audio.
+#[derive(Serialize)]
 pub enum TracksAudioZestingEvent<'a> {
     /// The number of tracks that are going to be downloaded.
     ///
@@ -54,6 +56,7 @@ pub enum TracksAudioZestingEvent<'a> {
     FinishTrackDownload {
         track_info: &'a Track,
         // TODO: replace with impl Read when stable
+        #[serde(skip_serializing)]
         track_data: Box<dyn Read>
     },
 
@@ -75,7 +78,7 @@ pub enum TracksAudioZestingEvent<'a> {
 }
 
 /// Events that can occur while zesting playlists
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub enum PlaylistsZestingEvent<'a> {
     /// The number of playlists' info that is going to be downloaded.
     ///
@@ -139,6 +142,7 @@ pub enum PlaylistsZestingEvent<'a> {
 }
 
 /// Events that can occur while zesting audio for playlists
+#[derive(Serialize)]
 pub enum PlaylistsAudioZestingEvent<'a> {
     /// The number of playlists and tracks that are going to be downloaded.
     ///

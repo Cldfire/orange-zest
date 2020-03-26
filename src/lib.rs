@@ -14,16 +14,17 @@ use std::fs::File;
 use std::cmp::min;
 use std::io::prelude::*;
 use serde::Serialize;
+use serde_derive::Serialize;
 use serde::de::DeserializeOwned;
 
 const API_BASE: &str = "https://api-v2.soundcloud.com/";
 /// Amount of time to pause after a 500 is returned from the server
 const PAUSE_SECS: u64 = 2;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub enum Error {
-    IoError(std::io::Error),
-    JsonDecodeError(serde_json::Error),
+    IoError(#[serde(skip_serializing)] std::io::Error),
+    JsonDecodeError(#[serde(skip_serializing)] serde_json::Error),
     /// Contains the response status code
     HttpError(u16),
     /// Something we needed wasn't present in the JSON
