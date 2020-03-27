@@ -149,7 +149,8 @@ impl Zester {
     /// 
     /// This will send a request to the "/me" api route to determine the id of
     /// the user whose credentials you provided.
-    // TODO: docs on how to get credentials
+    ///
+    /// See the crate README for instructions on how to obtain these credentials.
     pub fn new(oauth_token: String, client_id: String) -> Result<Self, Error> {
         let mut zester = Self {
             oauth_token,
