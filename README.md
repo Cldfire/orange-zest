@@ -28,7 +28,7 @@ You can find the OAuth token in two places:
 * Find network traffic in your devtools panel
 * Filter requests for `api-v2`
 * Select a request and look at the query parameters
-* Locate the paramater named `client_id`; its value is the client ID
+* Locate the parameter named `client_id`; its value is the client ID
 
 There are other ways to obtain a client ID, and it is also possible to do it programmatically. I may investigate such options in the future.
 

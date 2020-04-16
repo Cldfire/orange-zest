@@ -180,6 +180,7 @@ impl Zester {
         use LikesZestingEvent::*;
 
         // Make sure num_recent is a sensible value and return early if we have nothing to do
+        // TODO: don't use cached likes count
         let num_recent = min(num_recent, self.me.as_ref().unwrap().likes_count.unwrap() as u64);
         cb(NumLikesInfoToDownload { num: num_recent });
         if num_recent == 0 {
@@ -237,10 +238,12 @@ impl Zester {
             let likes_count = likes_raw.collection.as_ref().unwrap().len();
             total_likes_count += likes_count;
 
-            let extend_count = min(
-                (num_recent as usize).saturating_sub(total_likes_count),
+            // Make sure we don't take more info than we need to
+            let extend_count = if total_likes_count > num_recent as usize {
+                likes_count - (total_likes_count - num_recent as usize)
+            } else {
                 likes_count
-            );
+            };
             collections.extend(
                 likes_raw.collection
                     .unwrap()
@@ -294,6 +297,7 @@ impl Zester {
         use PlaylistsZestingEvent::*;
 
         // Make sure num_recent is a sensible value and return early if we have nothing to do
+                // TODO: don't use cached playlist count
         let num_recent = min(num_recent, self.me.as_ref().unwrap().total_playlist_count() as u64);
         cb(NumPlaylistInfoToDownload { num: num_recent });
         if num_recent == 0 {
@@ -351,10 +355,12 @@ impl Zester {
             playlists_count = playlists_raw.collection.as_ref().unwrap().len();
             total_playlists_count += playlists_count;
 
-            let extend_count = min(
-                (num_recent as usize).saturating_sub(total_playlists_count),
+            // Make sure we don't take more info than we need to 
+            let extend_count = if total_playlists_count > num_recent as usize {
+                playlists_count - (total_playlists_count - num_recent as usize)
+            } else {
                 playlists_count
-            );
+            };
             playlists_info.extend(playlists_raw.collection.unwrap().into_iter().take(extend_count));
 
             cb(MorePlaylistMetaInfoDownloaded { count: extend_count as i64 });
